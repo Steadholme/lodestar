@@ -3,9 +3,10 @@
 //! Hand-rolled rather than pulling a full resolver crate — the same dependency-minimal posture as
 //! the rest of the estate (sanctum hand-rolls its HTTP client, the healthcheck hand-rolls its
 //! probe). We support exactly what an authoritative server for a handful of zones needs:
-//! A / AAAA / MX / TXT / NS / CNAME / SOA, the standard `QUERY` opcode, class `IN`, wildcard owners,
-//! the AA bit, and correct NXDOMAIN vs NODATA. Names are encoded WITHOUT compression (compression is
-//! optional in the protocol), which keeps the encoder trivial and is accepted by every resolver.
+//! A / AAAA / MX / TXT / NS / CNAME / SRV / CAA / SOA, the standard `QUERY` opcode, class `IN`,
+//! wildcard owners, the AA bit, and correct NXDOMAIN vs NODATA. Names are encoded WITHOUT compression
+//! (compression is optional in the protocol), which keeps the encoder trivial and is accepted by every
+//! resolver.
 //!
 //! [`resolver`] turns a query name+type into a [`Lookup`] from the in-memory zone snapshot;
 //! [`server`] runs the UDP + TCP listeners that call into here.
@@ -25,6 +26,8 @@ pub const TYPE_SOA: u16 = 6;
 pub const TYPE_MX: u16 = 15;
 pub const TYPE_TXT: u16 = 16;
 pub const TYPE_AAAA: u16 = 28;
+pub const TYPE_SRV: u16 = 33;
+pub const TYPE_CAA: u16 = 257;
 pub const TYPE_ANY: u16 = 255;
 
 pub const CLASS_IN: u16 = 1;
@@ -46,6 +49,8 @@ pub fn type_from_str(s: &str) -> Option<u16> {
         "MX" => Some(TYPE_MX),
         "TXT" => Some(TYPE_TXT),
         "AAAA" => Some(TYPE_AAAA),
+        "SRV" => Some(TYPE_SRV),
+        "CAA" => Some(TYPE_CAA),
         "ANY" | "*" => Some(TYPE_ANY),
         _ => None,
     }
@@ -61,6 +66,8 @@ pub fn type_to_str(t: u16) -> String {
         TYPE_MX => "MX",
         TYPE_TXT => "TXT",
         TYPE_AAAA => "AAAA",
+        TYPE_SRV => "SRV",
+        TYPE_CAA => "CAA",
         TYPE_ANY => "ANY",
         _ => return format!("TYPE{t}"),
     }
@@ -74,8 +81,22 @@ pub enum RData {
     Aaaa(Ipv6Addr),
     /// NS / CNAME target (a domain name).
     Name(u16, String),
-    Mx { pref: u16, host: String },
+    Mx {
+        pref: u16,
+        host: String,
+    },
     Txt(String),
+    Srv {
+        priority: u16,
+        weight: u16,
+        port: u16,
+        target: String,
+    },
+    Caa {
+        flags: u8,
+        tag: String,
+        value: String,
+    },
     Soa(Soa),
 }
 
@@ -116,6 +137,8 @@ impl RData {
             RData::Name(t, _) => *t,
             RData::Mx { .. } => TYPE_MX,
             RData::Txt(_) => TYPE_TXT,
+            RData::Srv { .. } => TYPE_SRV,
+            RData::Caa { .. } => TYPE_CAA,
             RData::Soa(_) => TYPE_SOA,
         }
     }
@@ -128,6 +151,13 @@ impl RData {
             RData::Name(_, n) => format!("{n}."),
             RData::Mx { pref, host } => format!("{pref} {host}."),
             RData::Txt(s) => format!("\"{s}\""),
+            RData::Srv {
+                priority,
+                weight,
+                port,
+                target,
+            } => format!("{priority} {weight} {port} {target}."),
+            RData::Caa { flags, tag, value } => format!("{flags} {tag} \"{value}\""),
             RData::Soa(s) => format!(
                 "{}. {}. {} {} {} {} {}",
                 s.mname, s.rname, s.serial, s.refresh, s.retry, s.expire, s.minimum
@@ -146,6 +176,23 @@ impl RData {
                 encode_name(host, out);
             }
             RData::Txt(s) => encode_txt(s, out),
+            RData::Srv {
+                priority,
+                weight,
+                port,
+                target,
+            } => {
+                out.extend_from_slice(&priority.to_be_bytes());
+                out.extend_from_slice(&weight.to_be_bytes());
+                out.extend_from_slice(&port.to_be_bytes());
+                encode_name(target, out);
+            }
+            RData::Caa { flags, tag, value } => {
+                out.push(*flags);
+                out.push(tag.len().min(255) as u8);
+                out.extend_from_slice(&tag.as_bytes()[..tag.len().min(255)]);
+                out.extend_from_slice(value.as_bytes());
+            }
             RData::Soa(s) => {
                 encode_name(&s.mname, out);
                 encode_name(&s.rname, out);

@@ -107,7 +107,11 @@ impl Resolver {
 
     /// Number of zones currently loaded (for the dashboard status line).
     pub fn zone_count(&self) -> usize {
-        self.inner.read().expect("resolver lock poisoned").zones.len()
+        self.inner
+            .read()
+            .expect("resolver lock poisoned")
+            .zones
+            .len()
     }
 }
 
@@ -173,7 +177,11 @@ impl Snapshot {
         if apex && (qtype == TYPE_SOA || qtype == TYPE_ANY) {
             answers.push(self.soa_rr(zone));
         }
-        for r in zone.records.iter().filter(|r| r.name == qname && want(r.rtype)) {
+        for r in zone
+            .records
+            .iter()
+            .filter(|r| r.name == qname && want(r.rtype))
+        {
             answers.push(rr_for(qname, r));
         }
         if !answers.is_empty() {
@@ -295,6 +303,32 @@ fn parse_record(r: &Record) -> Option<RecView> {
             RData::Mx { pref, host }
         }
         "TXT" => RData::Txt(strip_quotes(&r.value).to_string()),
+        "SRV" => {
+            let mut it = value.split_whitespace();
+            let priority: u16 = it.next()?.parse().ok()?;
+            let weight: u16 = it.next()?.parse().ok()?;
+            let port: u16 = it.next()?.parse().ok()?;
+            let target = crate::config::normalize_name(&it.collect::<Vec<_>>().join(" "));
+            if target.is_empty() {
+                return None;
+            }
+            RData::Srv {
+                priority,
+                weight,
+                port,
+                target,
+            }
+        }
+        "CAA" => {
+            let mut it = value.split_whitespace();
+            let flags: u8 = it.next()?.parse().ok()?;
+            let tag = it.next()?.to_ascii_lowercase();
+            let value = strip_quotes(&it.collect::<Vec<_>>().join(" ")).to_string();
+            if tag.is_empty() || value.is_empty() {
+                return None;
+            }
+            RData::Caa { flags, tag, value }
+        }
         // SOA is synthesized, never stored; ignore any stray SOA rows.
         _ => return None,
     };
@@ -318,7 +352,9 @@ fn strip_quotes(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns::{RCODE_NOERROR, RCODE_NXDOMAIN, RCODE_REFUSED, TYPE_A, TYPE_MX, TYPE_TXT};
+    use crate::dns::{
+        RCODE_NOERROR, RCODE_NXDOMAIN, RCODE_REFUSED, TYPE_A, TYPE_CAA, TYPE_MX, TYPE_SRV, TYPE_TXT,
+    };
 
     fn rec(zone_id: &str, name: &str, rtype: &str, value: &str) -> Record {
         Record {
@@ -350,6 +386,8 @@ mod tests {
             rec("z1", "w33d.xyz", "MX", "10 mail.w33d.xyz"),
             rec("z1", "w33d.xyz", "TXT", "v=spf1 mx -all"),
             rec("z1", "w33d.xyz", "NS", "ns1.w33d.xyz"),
+            rec("z1", "_sip._tcp.w33d.xyz", "SRV", "10 20 5060 sip.w33d.xyz"),
+            rec("z1", "w33d.xyz", "CAA", "0 issue letsencrypt.org"),
             rec("z1", "mail.w33d.xyz", "A", "159.195.136.226"),
         ] {
             store.create_record(&r).await.unwrap();
@@ -383,6 +421,18 @@ mod tests {
         let r = loaded().await;
         assert_eq!(r.lookup("w33d.xyz", TYPE_MX).answers.len(), 1);
         assert_eq!(r.lookup("w33d.xyz", TYPE_TXT).answers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn srv_and_caa_resolve() {
+        let r = loaded().await;
+        let srv = r.lookup("_sip._tcp.w33d.xyz", TYPE_SRV);
+        assert_eq!(srv.answers.len(), 1);
+        assert_eq!(srv.answers[0].data.to_text(), "10 20 5060 sip.w33d.xyz.");
+
+        let caa = r.lookup("w33d.xyz", TYPE_CAA);
+        assert_eq!(caa.answers.len(), 1);
+        assert_eq!(caa.answers[0].data.to_text(), "0 issue \"letsencrypt.org\"");
     }
 
     #[tokio::test]

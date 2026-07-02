@@ -1,4 +1,4 @@
-//! Zone editor + record add/delete flow + JSON list + the in-process test-query box.
+//! Zone editor + record add/delete/import/export flow + JSON list + the in-process test-query box.
 //!
 //! All routes are mounted behind the gateway `auth=sso` route: the operator identity is taken from
 //! the injected `X-Auth-Subject` / `X-Auth-Email` (never a client field), and every state-changing
@@ -18,15 +18,15 @@ use crate::audit::AuditEvent;
 use crate::auth;
 use crate::dns::{type_from_str, type_to_str};
 use crate::error::AppError;
-use crate::handlers::{esc, topbar, APP_CSS};
-use crate::store::{Record, Zone};
-use crate::{new_id, now_secs, reload_now, AppState};
+use crate::handlers::{esc, fmt_date, topbar, APP_CSS};
+use crate::store::{Record, Zone, ZoneHistory};
+use crate::{new_id, now_secs, reload_now, zonefile, AppState};
 
 const ZONES_HTML: &str = include_str!("../../templates/zones.html");
 
 /// Record types an operator may store. SOA is excluded (it is synthesized per-zone); ANY is a query
 /// type only.
-const EDITABLE_TYPES: &[&str] = &["A", "AAAA", "CNAME", "MX", "NS", "TXT"];
+const EDITABLE_TYPES: &[&str] = &["A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "CAA"];
 
 /// Optional test-query params on `GET /` (`?q=name&qtype=A`).
 #[derive(Debug, Deserialize)]
@@ -59,6 +59,24 @@ pub struct AddForm {
 pub struct DeleteForm {
     #[serde(default)]
     pub id: String,
+    #[serde(default)]
+    pub csrf_token: String,
+}
+
+/// `GET /api/zones/export?zone_id=...` query.
+#[derive(Debug, Deserialize)]
+pub struct ZoneQuery {
+    #[serde(default)]
+    pub zone_id: String,
+}
+
+/// `POST /api/zones/import` body — replace a zone from a BIND zone file.
+#[derive(Debug, Deserialize)]
+pub struct ImportForm {
+    #[serde(default)]
+    pub zone_id: String,
+    #[serde(default)]
+    pub zone_file: String,
     #[serde(default)]
     pub csrf_token: String,
 }
@@ -99,8 +117,9 @@ pub async fn index(
     }
     for z in &zones {
         let records = state.store.list_records(&z.id).await;
+        let history = state.store.list_history(&z.id).await;
         total_records += records.len();
-        zone_blocks.push_str(&render_zone(z, &records, &csrf));
+        zone_blocks.push_str(&render_zone(z, &records, &history, &csrf));
     }
 
     let status = format!(
@@ -122,8 +141,8 @@ pub async fn index(
     html_with_cookie(body, set_cookie)
 }
 
-/// Render one zone card: header + records table + add-record form.
-fn render_zone(zone: &Zone, records: &[Record], csrf: &str) -> String {
+/// Render one zone card: header + records table + add/import forms + recent history.
+fn render_zone(zone: &Zone, records: &[Record], history: &[ZoneHistory], csrf: &str) -> String {
     let mut rows = String::new();
     if records.is_empty() {
         rows.push_str(r#"<tr><td colspan="5" class="muted">No records.</td></tr>"#);
@@ -157,12 +176,17 @@ fn render_zone(zone: &Zone, records: &[Record], csrf: &str) -> String {
         .map(|t| format!(r#"<option value="{t}">{t}</option>"#))
         .collect::<String>();
 
+    let history_block = render_history(history);
+
     format!(
         r#"<section class="card zone">
   <div class="card__body">
     <div class="zone__head">
       <h2 class="zone__name mono">{name}</h2>
-      <span class="zone__serial">serial {serial}</span>
+      <div class="zone-tools">
+        <span class="zone__serial">serial {serial}</span>
+        <a class="btn btn-secondary btn-sm" href="/api/zones/export?zone_id={zone_id}">Export</a>
+      </div>
     </div>
     <div class="table-wrap">
       <table class="rec-table">
@@ -179,6 +203,13 @@ fn render_zone(zone: &Zone, records: &[Record], csrf: &str) -> String {
       <input class="mono ttl" type="text" name="ttl" placeholder="TTL" value="300">
       <button class="btn btn-primary" type="submit">Add record</button>
     </form>
+    <form class="import-form" method="post" action="/api/zones/import">
+      <input type="hidden" name="zone_id" value="{zone_id}">
+      <input type="hidden" name="csrf_token" value="{csrf}">
+      <textarea class="mono" name="zone_file" rows="8" placeholder="$ORIGIN {name}.&#10;@ 300 IN A 203.0.113.10&#10;www 300 IN CNAME @"></textarea>
+      <button class="btn btn-secondary" type="submit">Import zone file</button>
+    </form>
+    {history_block}
   </div>
 </section>"#,
         name = esc(&zone.name),
@@ -187,6 +218,40 @@ fn render_zone(zone: &Zone, records: &[Record], csrf: &str) -> String {
         zone_id = esc(&zone.id),
         csrf = esc(csrf),
         type_options = type_options,
+        history_block = history_block,
+    )
+}
+
+fn render_history(history: &[ZoneHistory]) -> String {
+    let mut rows = String::new();
+    if history.is_empty() {
+        rows.push_str(r#"<tr><td colspan="4" class="muted">No local changes yet.</td></tr>"#);
+    }
+    for h in history {
+        rows.push_str(&format!(
+            r#"<tr>
+  <td>{when}</td>
+  <td class="mono">{actor}</td>
+  <td>{action}</td>
+  <td>{detail}</td>
+</tr>"#,
+            when = esc(&fmt_date(h.created_at)),
+            actor = esc(&h.actor),
+            action = esc(&h.action),
+            detail = esc(&h.detail),
+        ));
+    }
+    format!(
+        r#"<div class="history">
+  <h3>Change history</h3>
+  <div class="table-wrap">
+    <table class="rec-table history-table">
+      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </div>
+</div>"#,
+        rows = rows,
     )
 }
 
@@ -200,13 +265,15 @@ fn render_test(state: &AppState, query: &IndexQuery) -> String {
         .trim()
         .to_ascii_uppercase();
 
-    let type_options = ["A", "AAAA", "CNAME", "MX", "NS", "TXT", "SOA", "ANY"]
-        .iter()
-        .map(|t| {
-            let sel = if *t == qtype_str { " selected" } else { "" };
-            format!(r#"<option value="{t}"{sel}>{t}</option>"#)
-        })
-        .collect::<String>();
+    let type_options = [
+        "A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "CAA", "SOA", "ANY",
+    ]
+    .iter()
+    .map(|t| {
+        let sel = if *t == qtype_str { " selected" } else { "" };
+        format!(r#"<option value="{t}"{sel}>{t}</option>"#)
+    })
+    .collect::<String>();
 
     let mut result = String::new();
     if !name.is_empty() {
@@ -305,8 +372,7 @@ fn rcode_str(rcode: u8) -> &'static str {
 /// `GET /api/records` — every record across every zone, as JSON.
 pub async fn api_records(State(state): State<AppState>) -> Json<Vec<RecordJson>> {
     let zones = state.store.list_zones().await;
-    let names: HashMap<String, String> =
-        zones.into_iter().map(|z| (z.id, z.name)).collect();
+    let names: HashMap<String, String> = zones.into_iter().map(|z| (z.id, z.name)).collect();
     let mut out: Vec<RecordJson> = state
         .store
         .all_records()
@@ -325,6 +391,98 @@ pub async fn api_records(State(state): State<AppState>) -> Json<Vec<RecordJson>>
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.rtype.cmp(&b.rtype)));
     Json(out)
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/zones/export — BIND zone file
+// ---------------------------------------------------------------------------
+
+/// `GET /api/zones/export` — export one zone as a BIND-compatible zone file.
+pub async fn export_zone(
+    State(state): State<AppState>,
+    Query(query): Query<ZoneQuery>,
+) -> Result<Response, AppError> {
+    let zone = state
+        .store
+        .get_zone(&query.zone_id)
+        .await
+        .ok_or_else(|| AppError::NotFound("no such zone".to_string()))?;
+    let records = state.store.list_records(&zone.id).await;
+    let body = zonefile::render_zone_file(
+        &zone,
+        &records,
+        &state.config.primary_ns,
+        &state.config.hostmaster,
+    );
+    let mut resp = (StatusCode::OK, body).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    let filename = zone.name.replace('"', "");
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{filename}.zone\"")) {
+        resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    }
+    Ok(resp)
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/zones/import — replace zone records from BIND text
+// ---------------------------------------------------------------------------
+
+/// `POST /api/zones/import` — replace one zone from a BIND zone file, bump serial, reload, audit.
+pub async fn import_zone(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<ImportForm>,
+) -> Result<Response, AppError> {
+    let (_sub, _email) = auth::require_operator(&headers)?;
+    auth::verify_csrf(&headers, &form.csrf_token)?;
+
+    let zone = state
+        .store
+        .get_zone(&form.zone_id)
+        .await
+        .ok_or_else(|| AppError::NotFound("no such zone".to_string()))?;
+
+    let parsed =
+        zonefile::parse_zone_file(&zone, &form.zone_file).map_err(AppError::InvalidRequest)?;
+    if parsed.is_empty() {
+        return Err(AppError::InvalidRequest(
+            "zone file contains no supported records".to_string(),
+        ));
+    }
+
+    let now = now_secs();
+    let records: Vec<Record> = parsed
+        .into_iter()
+        .map(|r| Record {
+            id: new_id("rec"),
+            zone_id: zone.id.clone(),
+            name: r.name,
+            rtype: r.rtype,
+            value: r.value,
+            ttl: r.ttl,
+            created_at: now,
+        })
+        .collect();
+    zonefile::validate_record_set(&records).map_err(AppError::Conflict)?;
+
+    state.store.replace_records(&zone.id, &records).await?;
+    bump_serial(&state, &zone).await;
+
+    let detail = format!("import BIND zone file ({} records)", records.len());
+    record_history(&state, &headers, &zone, "import", &detail).await;
+    state.audit.emit(AuditEvent::notice(
+        "dns.zone.edit",
+        &auth::actor(&headers),
+        &zone.name,
+        &detail,
+    ));
+    reload_now(&state).await;
+    tracing::info!(zone = %zone.name, records = records.len(), "zone file imported");
+
+    Ok(redirect("/"))
 }
 
 // ---------------------------------------------------------------------------
@@ -353,13 +511,10 @@ pub async fn add_record(
             "unsupported record type: {rtype}"
         )));
     }
-    let owner = owner_name(&form.name, &zone.name);
-    let value = form.value.trim().to_string();
-    if value.is_empty() {
-        return Err(AppError::InvalidRequest("value is required".to_string()));
-    }
-    validate_value(&rtype, &value)?;
-    let ttl: i64 = parse_ttl(&form.ttl);
+    let owner = zonefile::owner_name(&form.name, &zone.name);
+    let value = zonefile::normalize_record_value(&rtype, &form.value, &zone.name)
+        .map_err(AppError::InvalidRequest)?;
+    let ttl: i64 = zonefile::parse_ttl(&form.ttl);
 
     let record = Record {
         id: new_id("rec"),
@@ -370,14 +525,18 @@ pub async fn add_record(
         ttl,
         created_at: now_secs(),
     };
+    let existing = state.store.list_records(&zone.id).await;
+    zonefile::validate_new_record(&existing, &record).map_err(AppError::Conflict)?;
     state.store.create_record(&record).await?;
     bump_serial(&state, &zone).await;
 
+    let detail = format!("add {rtype} {owner} -> {value}");
+    record_history(&state, &headers, &zone, "add", &detail).await;
     state.audit.emit(AuditEvent::notice(
         "dns.zone.edit",
         &auth::actor(&headers),
         &zone.name,
-        &format!("add {rtype} {owner} -> {value}"),
+        &detail,
     ));
     reload_now(&state).await;
     tracing::info!(zone = %zone.name, name = %owner, rtype = %rtype, "record added");
@@ -411,11 +570,18 @@ pub async fn delete_record(
     }
 
     let zone_name = zone.as_ref().map(|z| z.name.clone()).unwrap_or_default();
+    let detail = format!(
+        "delete {} {} -> {}",
+        record.rtype, record.name, record.value
+    );
+    if let Some(z) = &zone {
+        record_history(&state, &headers, z, "delete", &detail).await;
+    }
     state.audit.emit(AuditEvent::warning(
         "dns.zone.edit",
         &auth::actor(&headers),
         &zone_name,
-        &format!("delete {} {} -> {}", record.rtype, record.name, record.value),
+        &detail,
     ));
     reload_now(&state).await;
     tracing::info!(name = %record.name, rtype = %record.rtype, "record deleted");
@@ -427,66 +593,33 @@ pub async fn delete_record(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Compute the canonical owner name from the operator's input and the zone apex:
-/// `@`/empty -> apex; an already-fully-qualified name (the apex or a name ending in `.apex`) is kept
-/// verbatim; anything else is treated as relative and suffixed with the apex (so `www` -> `www.apex`,
-/// `*` -> `*.apex`).
-fn owner_name(input: &str, apex: &str) -> String {
-    let n = crate::config::normalize_name(input);
-    if n.is_empty() || n == "@" {
-        return apex.to_string();
-    }
-    if n == apex || n.ends_with(&format!(".{apex}")) {
-        return n;
-    }
-    format!("{n}.{apex}")
-}
-
-/// Parse a TTL, clamping to a sane non-negative range with a 300s default for blank/garbage input.
-fn parse_ttl(s: &str) -> i64 {
-    s.trim()
-        .parse::<i64>()
-        .ok()
-        .filter(|t| *t >= 0)
-        .map(|t| t.min(2_147_483_647))
-        .unwrap_or(300)
-}
-
-/// Validate a record VALUE against its type, so a malformed entry is rejected at the form (not
-/// silently dropped at reload time).
-fn validate_value(rtype: &str, value: &str) -> Result<(), AppError> {
-    use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::str::FromStr;
-    let bad = |m: &str| AppError::InvalidRequest(m.to_string());
-    match rtype {
-        "A" => {
-            Ipv4Addr::from_str(value.trim()).map_err(|_| bad("invalid IPv4 address for A record"))?;
-        }
-        "AAAA" => {
-            Ipv6Addr::from_str(value.trim())
-                .map_err(|_| bad("invalid IPv6 address for AAAA record"))?;
-        }
-        "MX" => {
-            let mut it = value.split_whitespace();
-            let pref = it.next().ok_or_else(|| bad("MX needs: <pref> <host>"))?;
-            pref.parse::<u16>()
-                .map_err(|_| bad("MX preference must be 0-65535"))?;
-            if it.next().is_none() {
-                return Err(bad("MX needs a mail host after the preference"));
-            }
-        }
-        // NS / CNAME / TXT accept any non-empty presentation value.
-        _ => {}
-    }
-    Ok(())
-}
-
 /// Bump the zone serial: strictly increasing, preferring the current epoch so it keeps climbing
 /// across restarts. Logged-and-ignored on failure (the record write already succeeded).
 async fn bump_serial(state: &AppState, zone: &Zone) {
     let next = (zone.serial + 1).max(now_secs());
     if let Err(e) = state.store.set_serial(&zone.id, next).await {
         tracing::warn!(error = %e, zone = %zone.name, "serial bump failed");
+    }
+}
+
+/// Append a local history row; failures are logged but never fail the DNS edit already applied.
+async fn record_history(
+    state: &AppState,
+    headers: &HeaderMap,
+    zone: &Zone,
+    action: &str,
+    detail: &str,
+) {
+    let entry = ZoneHistory {
+        id: new_id("hist"),
+        zone_id: zone.id.clone(),
+        actor: auth::actor(headers),
+        action: action.to_string(),
+        detail: detail.to_string(),
+        created_at: now_secs(),
+    };
+    if let Err(e) = state.store.create_history(&entry).await {
+        tracing::warn!(error = %e, zone = %zone.name, "history write failed");
     }
 }
 

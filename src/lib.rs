@@ -18,6 +18,8 @@
 //! - `GET  /api/records`         — JSON list of all records
 //! - `POST /api/records`         — add a record (CSRF) -> 303 `/`
 //! - `POST /api/records/delete`  — delete a record by id (CSRF) -> 303 `/`
+//! - `GET  /api/zones/export`    — export one zone as a BIND zone file
+//! - `POST /api/zones/import`    — replace one zone from a BIND zone file (CSRF) -> 303 `/`
 
 pub mod audit;
 pub mod auth;
@@ -27,6 +29,7 @@ pub mod error;
 pub mod handlers;
 pub mod seed;
 pub mod store;
+pub mod zonefile;
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -53,6 +56,8 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(handlers::health::healthz))
         .route("/", get(handlers::zones::index))
+        .route("/api/zones/export", get(handlers::zones::export_zone))
+        .route("/api/zones/import", post(handlers::zones::import_zone))
         .route(
             "/api/records",
             get(handlers::zones::api_records).post(handlers::zones::add_record),
@@ -102,7 +107,11 @@ pub async fn build_state_from_env() -> Result<AppState, String> {
             Arc::new(pg)
         }
         "memory" => Arc::new(InMemoryStore::new()),
-        other => return Err(format!("unknown LODESTAR_STORE={other} (use memory|postgres)")),
+        other => {
+            return Err(format!(
+                "unknown LODESTAR_STORE={other} (use memory|postgres)"
+            ))
+        }
     };
 
     let audit = AuditSink::start(

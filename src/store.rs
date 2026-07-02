@@ -28,7 +28,8 @@ pub struct Zone {
 }
 
 /// A resource record (maps 1:1 to a `records` row). `rtype` is the textual type (`A`, `AAAA`, `MX`,
-/// `TXT`, `NS`, `CNAME`), `value` its presentation form (e.g. `159.195.136.226`, `10 mail.w33d.xyz`).
+/// `TXT`, `NS`, `CNAME`, `SRV`, `CAA`), `value` its presentation form (e.g. `159.195.136.226`,
+/// `10 mail.w33d.xyz`).
 #[derive(Clone, Debug)]
 pub struct Record {
     pub id: String,
@@ -37,6 +38,17 @@ pub struct Record {
     pub rtype: String,
     pub value: String,
     pub ttl: i64,
+    pub created_at: i64,
+}
+
+/// One local change-history entry for a zone edit/import.
+#[derive(Clone, Debug)]
+pub struct ZoneHistory {
+    pub id: String,
+    pub zone_id: String,
+    pub actor: String,
+    pub action: String,
+    pub detail: String,
     pub created_at: i64,
 }
 
@@ -73,8 +85,15 @@ pub trait Store: Send + Sync {
     async fn get_record(&self, id: &str) -> Option<Record>;
     /// Insert a new record.
     async fn create_record(&self, record: &Record) -> Result<(), StoreError>;
+    /// Replace every record in a zone with a prepared set (zone-file import).
+    async fn replace_records(&self, zone_id: &str, records: &[Record]) -> Result<(), StoreError>;
     /// Delete a record by id.
     async fn delete_record(&self, id: &str) -> Result<(), StoreError>;
+
+    /// Recent local change-history entries for one zone.
+    async fn list_history(&self, zone_id: &str) -> Vec<ZoneHistory>;
+    /// Append one local change-history entry.
+    async fn create_history(&self, entry: &ZoneHistory) -> Result<(), StoreError>;
 }
 
 // --------------------------------------------------------------------------------------
@@ -85,6 +104,7 @@ pub trait Store: Send + Sync {
 pub struct InMemoryStore {
     zones: Mutex<Vec<Zone>>,
     records: Mutex<Vec<Record>>,
+    history: Mutex<Vec<ZoneHistory>>,
 }
 
 impl InMemoryStore {
@@ -177,11 +197,40 @@ impl Store for InMemoryStore {
         Ok(())
     }
 
+    async fn replace_records(&self, zone_id: &str, records: &[Record]) -> Result<(), StoreError> {
+        let mut current = self.records.lock().expect("records lock poisoned");
+        current.retain(|r| r.zone_id != zone_id);
+        current.extend(records.iter().cloned());
+        Ok(())
+    }
+
     async fn delete_record(&self, id: &str) -> Result<(), StoreError> {
         self.records
             .lock()
             .expect("records lock poisoned")
             .retain(|r| r.id != id);
+        Ok(())
+    }
+
+    async fn list_history(&self, zone_id: &str) -> Vec<ZoneHistory> {
+        let mut v: Vec<ZoneHistory> = self
+            .history
+            .lock()
+            .expect("history lock poisoned")
+            .iter()
+            .filter(|h| h.zone_id == zone_id)
+            .cloned()
+            .collect();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v.truncate(25);
+        v
+    }
+
+    async fn create_history(&self, entry: &ZoneHistory) -> Result<(), StoreError> {
+        self.history
+            .lock()
+            .expect("history lock poisoned")
+            .push(entry.clone());
         Ok(())
     }
 }
@@ -250,6 +299,24 @@ impl PgStore {
         )
         .execute(&self.pool)
         .await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS zone_history (\
+                 id TEXT PRIMARY KEY, \
+                 zone_id TEXT NOT NULL, \
+                 actor TEXT NOT NULL, \
+                 action TEXT NOT NULL, \
+                 detail TEXT NOT NULL, \
+                 created_at BIGINT NOT NULL\
+             )",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_zone_history_zone_created \
+             ON zone_history (zone_id, created_at)",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -270,6 +337,17 @@ impl PgStore {
             rtype: row.try_get("rtype")?,
             value: row.try_get("value")?,
             ttl: row.try_get("ttl")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
+
+    fn history_from_row(row: &sqlx::postgres::PgRow) -> Result<ZoneHistory, sqlx::Error> {
+        Ok(ZoneHistory {
+            id: row.try_get("id")?,
+            zone_id: row.try_get("zone_id")?,
+            actor: row.try_get("actor")?,
+            action: row.try_get("action")?,
+            detail: row.try_get("detail")?,
             created_at: row.try_get("created_at")?,
         })
     }
@@ -301,15 +379,13 @@ impl PgStore {
     }
 
     async fn create_zone_async(&self, z: &Zone) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT INTO zones (id, name, serial, created_at) VALUES ($1, $2, $3, $4)",
-        )
-        .bind(&z.id)
-        .bind(&z.name)
-        .bind(z.serial)
-        .bind(z.created_at)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT INTO zones (id, name, serial, created_at) VALUES ($1, $2, $3, $4)")
+            .bind(&z.id)
+            .bind(&z.name)
+            .bind(z.serial)
+            .bind(z.created_at)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -335,11 +411,10 @@ impl PgStore {
     }
 
     async fn all_records_async(&self) -> Result<Vec<Record>, sqlx::Error> {
-        let rows = sqlx::query(
-            "SELECT id, zone_id, name, rtype, value, ttl, created_at FROM records",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT id, zone_id, name, rtype, value, ttl, created_at FROM records")
+                .fetch_all(&self.pool)
+                .await?;
         rows.iter().map(Self::record_from_row).collect()
     }
 
@@ -370,11 +445,67 @@ impl PgStore {
         Ok(())
     }
 
+    async fn replace_records_async(
+        &self,
+        zone_id: &str,
+        records: &[Record],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM records WHERE zone_id = $1")
+            .bind(zone_id)
+            .execute(&mut *tx)
+            .await?;
+        for r in records {
+            sqlx::query(
+                "INSERT INTO records (id, zone_id, name, rtype, value, ttl, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(&r.id)
+            .bind(&r.zone_id)
+            .bind(&r.name)
+            .bind(&r.rtype)
+            .bind(&r.value)
+            .bind(r.ttl)
+            .bind(r.created_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn delete_record_async(&self, id: &str) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM records WHERE id = $1")
             .bind(id)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    async fn list_history_async(&self, zone_id: &str) -> Result<Vec<ZoneHistory>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, zone_id, actor, action, detail, created_at FROM zone_history \
+             WHERE zone_id = $1 ORDER BY created_at DESC LIMIT 25",
+        )
+        .bind(zone_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(Self::history_from_row).collect()
+    }
+
+    async fn create_history_async(&self, h: &ZoneHistory) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO zone_history (id, zone_id, actor, action, detail, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&h.id)
+        .bind(&h.zone_id)
+        .bind(&h.actor)
+        .bind(&h.action)
+        .bind(&h.detail)
+        .bind(h.created_at)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
@@ -450,8 +581,27 @@ impl Store for PgStore {
             .map_err(|e| StoreError::Backend(e.to_string()))
     }
 
+    async fn replace_records(&self, zone_id: &str, records: &[Record]) -> Result<(), StoreError> {
+        self.replace_records_async(zone_id, records)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))
+    }
+
     async fn delete_record(&self, id: &str) -> Result<(), StoreError> {
         self.delete_record_async(id)
+            .await
+            .map_err(|e| StoreError::Backend(e.to_string()))
+    }
+
+    async fn list_history(&self, zone_id: &str) -> Vec<ZoneHistory> {
+        self.list_history_async(zone_id).await.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "pg list_history failed");
+            Vec::new()
+        })
+    }
+
+    async fn create_history(&self, entry: &ZoneHistory) -> Result<(), StoreError> {
+        self.create_history_async(entry)
             .await
             .map_err(|e| StoreError::Backend(e.to_string()))
     }

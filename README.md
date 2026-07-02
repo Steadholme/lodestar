@@ -10,13 +10,14 @@ healthcheck.
 Two surfaces, one binary:
 
 - **Admin dashboard** (HTTP, internal port **9110**) — behind the Sluice `auth=sso` route at
-  `dns.w33d.xyz`. List zones + records, add / delete records (CSRF), and a **test-query box** that
-  resolves a name against the in-process resolver and shows the dig-style answer. Internal-only:
-  Lodestar trusts the gateway-injected `X-Auth-Subject` / `X-Auth-Email` headers and has no login UI.
+  `dns.w33d.xyz`. List zones + records, add / delete records (CSRF), import/export BIND zone files,
+  show local change history, and provide a **test-query box** that resolves a name against the
+  in-process resolver and shows the dig-style answer. Internal-only: Lodestar trusts the
+  gateway-injected `X-Auth-Subject` / `X-Auth-Email` headers and has no login UI.
 - **DNS server** (UDP + TCP) — answers authoritative queries from the DB: `A` / `AAAA` / `MX` /
-  `TXT` / `NS` / `CNAME`, synthesized `SOA` + apex `NS`, wildcard matching, the AA bit, and correct
-  NXDOMAIN vs NODATA. It serves a snapshot reloaded from the store every `LODESTAR_RELOAD_SECS` and
-  immediately after every dashboard edit.
+  `TXT` / `NS` / `CNAME` / `SRV` / `CAA`, synthesized `SOA` + apex `NS`, wildcard matching, the AA
+  bit, and correct NXDOMAIN vs NODATA. It serves a snapshot reloaded from the store every
+  `LODESTAR_RELOAD_SECS` and immediately after every dashboard edit.
 
 ## ⚠️ Port :5353 — NOT :53 (build-only)
 
@@ -36,6 +37,9 @@ zones(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, serial BIGINT NOT NULL DEF
 records(id TEXT PRIMARY KEY, zone_id TEXT NOT NULL, name TEXT NOT NULL, rtype TEXT NOT NULL,
         value TEXT NOT NULL, ttl BIGINT NOT NULL DEFAULT 300, created_at BIGINT NOT NULL)
 CREATE INDEX ON records (zone_id, name, rtype)
+zone_history(id TEXT PRIMARY KEY, zone_id TEXT NOT NULL, actor TEXT NOT NULL,
+             action TEXT NOT NULL, detail TEXT NOT NULL, created_at BIGINT NOT NULL)
+CREATE INDEX ON zone_history (zone_id, created_at)
 ```
 
 No JSONB / arrays / SERIAL / extensions / vendor types. `CREATE TABLE IF NOT EXISTS` runs on startup.
@@ -54,14 +58,18 @@ server answers something real immediately: apex `A` → `159.195.136.226`, wildc
 |--------|-----------------------|----------|------------------------------------------|
 | GET    | `/healthz`            | public   | Liveness (`ok`). Container HEALTHCHECK.  |
 | GET    | `/`                   | sso      | Zone editor + test-query box.            |
+| GET    | `/api/zones/export`   | sso      | Export `?zone_id=...` as BIND text.      |
+| POST   | `/api/zones/import`   | sso+CSRF | Replace a zone from BIND text. → 303 `/` |
 | GET    | `/api/records`        | sso      | JSON list of all records.                |
 | POST   | `/api/records`        | sso+CSRF | Add a record. → 303 `/`                  |
 | POST   | `/api/records/delete` | sso+CSRF | Delete a record by id. → 303 `/`         |
 
 Editing a record = delete + re-add (the API exposes add and delete; every change bumps the zone
-serial, mirrors a `dns.zone.edit` audit event, and reloads the resolver). DNS queries arrive on the
-`:5353` UDP/TCP listeners — that surface is unauthenticated by design, as authoritative DNS is, and
-never reads the `X-Auth-*` headers.
+serial, writes local history, mirrors a `dns.zone.edit` audit event, and reloads the resolver).
+Imports replace all records in the selected zone after BIND parsing and CNAME/duplicate conflict
+validation; `SOA` rows are accepted but skipped because Lodestar synthesizes SOA from zone metadata.
+DNS queries arrive on the `:5353` UDP/TCP listeners — that surface is unauthenticated by design, as
+authoritative DNS is, and never reads the `X-Auth-*` headers.
 
 ## Configuration (env, with working in-memory defaults)
 
