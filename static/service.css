@@ -1,0 +1,129 @@
+/* Lodestar service surface, layered after Odyssey canonical CSS. */
+
+.page-console { background: var(--bg); }
+.page-reading { background: var(--bg); }
+
+/* Top-bar right-side helpers rendered by Lodestar's topbar(). */
+.allapps {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--border-2); border-radius: 8px; background: var(--surface);
+  font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+}
+.allapps:hover { background: var(--bg-2); color: var(--ink); }
+.allapps svg { width: 14px; height: 14px; opacity: .8; }
+.userchip { display: inline-flex; align-items: center; gap: 8px; padding-left: 4px; }
+.userchip__avatar {
+  width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #fff; font-weight: 600; font-size: 12px;
+}
+.user-email { font-size: 13px; color: var(--ink-2); font-weight: 500; }
+@media (max-width: 640px) { .user-email, .topbar__title { display: none; } }
+
+/* Wide console + in-card subhead (canonical styles .console__head .sub; the bare
+   .sub used inside cards needs its own colour). */
+.console--wide { max-width: 1120px; }
+.sub { color: var(--ink-2); }
+
+/* Stacked cards need vertical rhythm (canonical .card carries no inter-card margin). */
+.card + .card { margin-top: 20px; }
+
+/* ---- empty state (no zones) ---- */
+.empty-state {
+  text-align: center; padding: 56px 24px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.empty-state h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: var(--ink); }
+.empty-state p { margin: 0; color: var(--ink-3); font-size: 14px; }
+
+/* ---- zone card head ---- */
+.zone__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border);
+}
+.zone__name { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; color: var(--ink); }
+.zone-tools { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.zone__serial {
+  font-size: 11.5px; font-weight: 550; color: var(--ink-3);
+  text-transform: uppercase; letter-spacing: .03em;
+  background: var(--surface-2); border: 1px solid var(--border);
+  padding: 3px 9px; border-radius: var(--radius-sm); white-space: nowrap;
+}
+
+/* ---- records table (scroll wrapper renamed off canonical .table-wrap card frame) ---- */
+.rec-wrap { overflow-x: auto; }
+.rec-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.rec-table thead th {
+  text-align: left; font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
+  text-transform: uppercase; color: var(--ink-3);
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.rec-table tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border); color: var(--ink-2); vertical-align: middle; }
+.rec-table tbody tr:last-child td { border-bottom: 0; }
+.rec-table tbody tr:hover { background: var(--surface-2); }
+.rec-table .mono, .rec-table td.mono { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+.rec-table .value { max-width: 420px; overflow-wrap: anywhere; }
+.rec-table .row-action { text-align: right; white-space: nowrap; }
+
+/* record-type tag (soft accent tint) */
+.rtype {
+  display: inline-block; font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+  color: var(--accent-2); background: var(--accent-soft); border: 1px solid var(--accent-soft-2);
+  padding: 2px 8px; border-radius: var(--radius-sm);
+}
+
+/* ---- add-record form (inline row) ---- */
+.add-form {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);
+}
+.add-form input[type=text] { flex: 1 1 160px; min-width: 120px; }
+.add-form input.ttl { flex: 0 0 84px; }
+.add-form select { flex: 0 0 102px; width: auto; }
+.add-form input.mono { font-family: var(--mono); font-size: 13px; }
+
+/* ---- zone import + local history ---- */
+.import-form {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.import-form textarea { min-height: 126px; font-size: 12.5px; }
+.history { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); }
+.history h3 { margin: 0 0 10px; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+.history-table td { font-size: 12.5px; }
+
+/* inline delete form */
+.inline-form { display: inline; margin: 0; }
+
+/* ---- test-query card ---- */
+.test__title { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--ink); }
+.test-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0; }
+.test-form input[type=text] { flex: 1 1 260px; }
+.test-form select { flex: 0 0 110px; width: auto; }
+.test-form input.mono { font-family: var(--mono); font-size: 13px; }
+
+/* dig-style answer block — flat, surface-tinted (not a dark terminal) */
+.answer {
+  margin: 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+  white-space: pre; tab-size: 4; overflow-x: auto; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 14px 16px;
+}
+.answer--err {
+  white-space: normal; color: var(--down-ink);
+  background: var(--down-soft); border-color: var(--down-border);
+}
+
+/* ---- error page ---- */
+.reader { max-width: 720px; margin: 0 auto; padding: 56px 28px 72px; }
+.error-card { max-width: 460px; margin: 48px auto; text-align: center; }
+.error-card__code { font-size: 48px; font-weight: 600; color: var(--accent-2); letter-spacing: -.02em; }
+.error-card__title { margin: 8px 0; font-size: 20px; font-weight: 600; color: var(--ink); }
+.error-card__msg { margin: 0 0 24px; color: var(--ink-2); }
+
+@media (max-width: 640px) {
+  .add-form input.ttl, .add-form select, .test-form select { flex: 1 1 100%; }
+  .zone__head { align-items: flex-start; flex-direction: column; }
+  .zone-tools { justify-content: flex-start; }
+  .import-form { grid-template-columns: 1fr; }
+}

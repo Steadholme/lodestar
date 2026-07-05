@@ -18,7 +18,7 @@ use crate::audit::AuditEvent;
 use crate::auth;
 use crate::dns::{type_from_str, type_to_str};
 use crate::error::AppError;
-use crate::handlers::{esc, fmt_date, topbar, APP_CSS};
+use crate::handlers::{app_css, esc, fmt_date, topbar};
 use crate::store::{Record, Zone, ZoneHistory};
 use crate::{new_id, now_secs, reload_now, zonefile, AppState};
 
@@ -132,7 +132,7 @@ pub async fn index(
     let test = render_test(&state, &query);
 
     let body = ZONES_HTML
-        .replace("{{CSS}}", APP_CSS)
+        .replace("{{CSS}}", app_css())
         .replace("{{TOPBAR}}", &topbar("Lodestar", &email))
         .replace("{{STATUS}}", &esc(&status))
         .replace("{{TEST}}", &test)
@@ -188,7 +188,7 @@ fn render_zone(zone: &Zone, records: &[Record], history: &[ZoneHistory], csrf: &
         <a class="btn btn-secondary btn-sm" href="/api/zones/export?zone_id={zone_id}">Export</a>
       </div>
     </div>
-    <div class="table-wrap">
+    <div class="rec-wrap">
       <table class="rec-table">
         <thead><tr><th>Name</th><th>Type</th><th>TTL</th><th>Value</th><th></th></tr></thead>
         <tbody>{rows}</tbody>
@@ -244,7 +244,7 @@ fn render_history(history: &[ZoneHistory]) -> String {
     format!(
         r#"<div class="history">
   <h3>Change history</h3>
-  <div class="table-wrap">
+  <div class="rec-wrap">
     <table class="rec-table history-table">
       <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
       <tbody>{rows}</tbody>

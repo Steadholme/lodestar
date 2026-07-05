@@ -10,10 +10,26 @@
 pub mod health;
 pub mod zones;
 
+use std::sync::OnceLock;
+
 use axum::http::StatusCode;
 
+/// Lodestar-only CSS layered after Odyssey's canonical font, tokens, and components.
+pub const SERVICE_CSS: &str = include_str!("../../static/service.css");
+
+static APP_CSS: OnceLock<String> = OnceLock::new();
+
 /// Embedded design system, inlined into each rendered page's `<style>`.
-pub const APP_CSS: &str = include_str!("../../static/app.css");
+pub fn app_css() -> &'static str {
+    APP_CSS
+        .get_or_init(|| {
+            let mut css = String::with_capacity(odyssey::APP_CSS.len() + SERVICE_CSS.len());
+            css.push_str(odyssey::APP_CSS);
+            css.push_str(SERVICE_CSS);
+            css
+        })
+        .as_str()
+}
 
 /// Cross-subdomain gateway logout (Lodestar lives at dns.w33d.xyz; the IdP is at id.w33d.xyz).
 pub const LOGOUT_URL: &str = "https://id.w33d.xyz/_gw/auth/logout";
@@ -119,7 +135,7 @@ pub fn error_page(status: StatusCode, message: &str) -> String {
   </div>
 </main>
 </body></html>"#,
-        css = APP_CSS,
+        css = app_css(),
         topbar = topbar("Lodestar", "—"),
         code = code,
         reason = esc(reason),

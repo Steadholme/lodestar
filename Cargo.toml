@@ -14,6 +14,8 @@ name = "lodestar"
 path = "src/main.rs"
 
 [dependencies]
+# Vendored Odyssey canonical CSS (font + tokens + shared components) for server-rendered pages.
+odyssey = { path = "crates/odyssey" }
 # HTTP framework for the admin dashboard (shared with keystone/inkwell/sanctum): Form/State/Path/
 # Json extractors, typed responses, server-rendered HTML.
 axum = "0.8"
