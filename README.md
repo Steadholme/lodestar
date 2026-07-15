@@ -1,7 +1,7 @@
 # Lodestar — authoritative DNS server + zone admin
 
 Lodestar stands up **sovereign authoritative DNS** for `w33d.xyz`, served from a database and ready
-for a future NS-delegation cutover. It is part of the HOLDFAST estate and follows the same shape as
+for a future NS-delegation cutover. It is part of the Steadholme estate and follows the same shape as
 inkwell / sanctum: an async `Store` trait (in-memory default + portable-SQL `PgStore`), a
 server-rendered enterprise dashboard reusing the estate design tokens, gateway-injected SSO identity,
 double-submit CSRF, a non-blocking Watchtower audit emitter, and a dependency-free container

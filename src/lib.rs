@@ -1,4 +1,4 @@
-//! Lodestar — authoritative DNS server + zone admin for the HOLDFAST stack.
+//! Lodestar — authoritative DNS server + zone admin for the Steadholme stack.
 //!
 //! Two surfaces, one binary:
 //! - The ADMIN DASHBOARD (`app`) is an axum service behind a Sluice `auth=sso` route at the

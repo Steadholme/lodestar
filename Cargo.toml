@@ -2,7 +2,7 @@
 name = "lodestar"
 version = "0.1.0"
 edition = "2021"
-description = "Lodestar — authoritative DNS server + zone admin for the HOLDFAST stack."
+description = "Lodestar — authoritative DNS server + zone admin for the Steadholme stack."
 license = "MIT OR Apache-2.0"
 
 [lib]
