@@ -311,6 +311,44 @@ _sip._tcp IN SRV 10 20 5060 sip
     );
 }
 
+#[tokio::test]
+async fn empty_store_renders_empty_state() {
+    let state = build_dev_state();
+    let (status, body) = call(&state, get_csrf("/")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let empty = r#"<div class="empty-state"><h2>No zones yet</h2><p>The default zone is seeded on first run. If you see this, the store is empty.</p></div>"#;
+    assert_eq!(body.matches(empty).count(), 1, "exact empty block");
+    let status_line = "0 zone(s), 0 record(s) loaded · serving authoritative DNS on 0.0.0.0:5353";
+    assert_eq!(body.matches(status_line).count(), 1, "exact empty status");
+    assert!(!body.contains(r#"<section class="card zone">"#));
+}
+
+#[tokio::test]
+async fn test_query_card_resolves_via_index() {
+    let state = seeded_state().await;
+    let (status, body) = call(&state, get_csrf("/?q=w33d.xyz&qtype=A")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let start = body
+        .find(r#"<pre class="answer">"#)
+        .expect("answer block starts");
+    assert_eq!(body.matches(r#"<pre class="answer">"#).count(), 1);
+    let end = body[start..]
+        .find("</pre>")
+        .map(|offset| start + offset + 6)
+        .expect("answer block ends");
+    let answer = &body[start..end];
+    assert_eq!(answer.len(), 144, "exact answer-block length");
+    assert_eq!(
+        fingerprint(answer),
+        0xa217768838ef080c,
+        "exact answer-block bytes"
+    );
+    assert!(answer.contains("w33d.xyz"));
+    assert!(answer.contains("159.195.136.226"));
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
@@ -326,6 +364,14 @@ async fn call(state: &AppState, req: Request<Body>) -> (StatusCode, String) {
 
 fn get(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
+}
+
+fn get_csrf(uri: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::COOKIE, format!("__Host-csrf={CSRF}"))
+        .body(Body::empty())
+        .unwrap()
 }
 
 /// Build a urlencoded POST carrying the test CSRF cookie + (optionally) gateway identity.
@@ -364,4 +410,13 @@ fn enc(s: &str) -> String {
         }
     }
     o
+}
+
+fn fingerprint(value: &str) -> u64 {
+    value
+        .as_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+        })
 }

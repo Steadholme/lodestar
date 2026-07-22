@@ -9,6 +9,7 @@
 
 pub mod health;
 pub mod zones;
+mod zones_view;
 
 use std::sync::OnceLock;
 

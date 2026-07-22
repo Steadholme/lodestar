@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::audit::AuditEvent;
 use crate::auth;
-use crate::dns::{type_from_str, type_to_str};
+use crate::dns::type_from_str;
 use crate::error::AppError;
-use crate::handlers::{app_css, esc, fmt_date, topbar};
+use crate::handlers::zones_view;
+use crate::handlers::{app_css, esc, topbar};
 use crate::store::{Record, Zone, ZoneHistory};
 use crate::{new_id, now_secs, reload_now, zonefile, AppState};
 
@@ -26,7 +27,7 @@ const ZONES_HTML: &str = include_str!("../../templates/zones.html");
 
 /// Record types an operator may store. SOA is excluded (it is synthesized per-zone); ANY is a query
 /// type only.
-const EDITABLE_TYPES: &[&str] = &["A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "CAA"];
+pub(super) const EDITABLE_TYPES: &[&str] = &["A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "CAA"];
 
 /// Optional test-query params on `GET /` (`?q=name&qtype=A`).
 #[derive(Debug, Deserialize)]
@@ -119,7 +120,13 @@ pub async fn index(
         let records = state.store.list_records(&z.id).await;
         let history = state.store.list_history(&z.id).await;
         total_records += records.len();
-        zone_blocks.push_str(&render_zone(z, &records, &history, &csrf));
+        zone_blocks.push_str(&zones_view::render_zone(
+            z,
+            &records,
+            &history,
+            &csrf,
+            EDITABLE_TYPES,
+        ));
     }
 
     let status = format!(
@@ -141,120 +148,6 @@ pub async fn index(
     html_with_cookie(body, set_cookie)
 }
 
-/// Render one zone card: header + records table + add/import forms + recent history.
-fn render_zone(zone: &Zone, records: &[Record], history: &[ZoneHistory], csrf: &str) -> String {
-    let mut rows = String::new();
-    if records.is_empty() {
-        rows.push_str(r#"<tr><td colspan="5" class="muted">No records.</td></tr>"#);
-    }
-    for r in records {
-        rows.push_str(&format!(
-            r#"<tr>
-  <td class="mono">{name}</td>
-  <td><span class="rtype">{rtype}</span></td>
-  <td class="mono">{ttl}</td>
-  <td class="mono value">{value}</td>
-  <td class="row-action">
-    <form class="inline-form" method="post" action="/api/records/delete" onsubmit="return confirm('Delete this record?');">
-      <input type="hidden" name="id" value="{id}">
-      <input type="hidden" name="csrf_token" value="{csrf}">
-      <button class="btn btn-danger btn-sm" type="submit">Delete</button>
-    </form>
-  </td>
-</tr>"#,
-            name = esc(&r.name),
-            rtype = esc(&r.rtype),
-            ttl = r.ttl,
-            value = esc(&r.value),
-            id = esc(&r.id),
-            csrf = esc(csrf),
-        ));
-    }
-
-    let type_options = EDITABLE_TYPES
-        .iter()
-        .map(|t| format!(r#"<option value="{t}">{t}</option>"#))
-        .collect::<String>();
-
-    let history_block = render_history(history);
-
-    format!(
-        r#"<section class="card zone">
-  <div class="card__body">
-    <div class="zone__head">
-      <h2 class="zone__name mono">{name}</h2>
-      <div class="zone-tools">
-        <span class="zone__serial">serial {serial}</span>
-        <a class="btn btn-secondary btn-sm" href="/api/zones/export?zone_id={zone_id}">Export</a>
-      </div>
-    </div>
-    <div class="rec-wrap">
-      <table class="rec-table">
-        <thead><tr><th>Name</th><th>Type</th><th>TTL</th><th>Value</th><th></th></tr></thead>
-        <tbody>{rows}</tbody>
-      </table>
-    </div>
-    <form class="add-form" method="post" action="/api/records">
-      <input type="hidden" name="zone_id" value="{zone_id}">
-      <input type="hidden" name="csrf_token" value="{csrf}">
-      <input class="mono" type="text" name="name" placeholder="name (@ for apex, * for wildcard)" maxlength="255">
-      <select name="rtype">{type_options}</select>
-      <input class="mono" type="text" name="value" placeholder="value (e.g. 159.195.136.226)" maxlength="2048" required>
-      <input class="mono ttl" type="text" name="ttl" placeholder="TTL" value="300">
-      <button class="btn btn-primary" type="submit">Add record</button>
-    </form>
-    <form class="import-form" method="post" action="/api/zones/import">
-      <input type="hidden" name="zone_id" value="{zone_id}">
-      <input type="hidden" name="csrf_token" value="{csrf}">
-      <textarea class="mono" name="zone_file" rows="8" placeholder="$ORIGIN {name}.&#10;@ 300 IN A 203.0.113.10&#10;www 300 IN CNAME @"></textarea>
-      <button class="btn btn-secondary" type="submit">Import zone file</button>
-    </form>
-    {history_block}
-  </div>
-</section>"#,
-        name = esc(&zone.name),
-        serial = zone.serial,
-        rows = rows,
-        zone_id = esc(&zone.id),
-        csrf = esc(csrf),
-        type_options = type_options,
-        history_block = history_block,
-    )
-}
-
-fn render_history(history: &[ZoneHistory]) -> String {
-    let mut rows = String::new();
-    if history.is_empty() {
-        rows.push_str(r#"<tr><td colspan="4" class="muted">No local changes yet.</td></tr>"#);
-    }
-    for h in history {
-        rows.push_str(&format!(
-            r#"<tr>
-  <td>{when}</td>
-  <td class="mono">{actor}</td>
-  <td>{action}</td>
-  <td>{detail}</td>
-</tr>"#,
-            when = esc(&fmt_date(h.created_at)),
-            actor = esc(&h.actor),
-            action = esc(&h.action),
-            detail = esc(&h.detail),
-        ));
-    }
-    format!(
-        r#"<div class="history">
-  <h3>Change history</h3>
-  <div class="rec-wrap">
-    <table class="rec-table history-table">
-      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
-      <tbody>{rows}</tbody>
-    </table>
-  </div>
-</div>"#,
-        rows = rows,
-    )
-}
-
 /// Render the test-query card + (when a name was submitted) the resolved answer.
 fn render_test(state: &AppState, query: &IndexQuery) -> String {
     let name = query.q.as_deref().unwrap_or("").trim().to_string();
@@ -265,104 +158,24 @@ fn render_test(state: &AppState, query: &IndexQuery) -> String {
         .trim()
         .to_ascii_uppercase();
 
-    let type_options = [
-        "A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "CAA", "SOA", "ANY",
-    ]
-    .iter()
-    .map(|t| {
-        let sel = if *t == qtype_str { " selected" } else { "" };
-        format!(r#"<option value="{t}"{sel}>{t}</option>"#)
-    })
-    .collect::<String>();
-
-    let mut result = String::new();
-    if !name.is_empty() {
+    let outcome = if name.is_empty() {
+        zones_view::TestOutcome::Empty
+    } else {
         let normalized = crate::config::normalize_name(&name);
         match type_from_str(&qtype_str) {
             Some(qtype) => {
-                let lk = state.resolver.lookup(&normalized, qtype);
-                result = render_lookup(&normalized, qtype, &lk);
+                let lookup = state.resolver.lookup(&normalized, qtype);
+                zones_view::TestOutcome::Resolved {
+                    qname: normalized,
+                    qtype,
+                    lookup,
+                }
             }
-            None => {
-                result = format!(
-                    r#"<div class="answer answer--err">Unknown query type: {}</div>"#,
-                    esc(&qtype_str)
-                );
-            }
+            None => zones_view::TestOutcome::UnknownType,
         }
-    }
-
-    format!(
-        r#"<section class="card test">
-  <div class="card__body">
-    <h2 class="test__title">Test query</h2>
-    <p class="sub">Resolve a name against the in-process authoritative resolver (the same answers served on the wire).</p>
-    <form class="test-form" method="get" action="/">
-      <input class="mono" type="text" name="q" placeholder="name (e.g. id.w33d.xyz)" value="{name}" maxlength="255">
-      <select name="qtype">{type_options}</select>
-      <button class="btn btn-secondary" type="submit">Resolve</button>
-    </form>
-    {result}
-  </div>
-</section>"#,
-        name = esc(&name),
-        type_options = type_options,
-        result = result,
-    )
-}
-
-/// Format a [`Lookup`] as a dig-style answer block.
-fn render_lookup(qname: &str, qtype: u16, lk: &crate::dns::Lookup) -> String {
-    let mut lines = String::new();
-    for rr in &lk.answers {
-        lines.push_str(&format!(
-            "{:<28} {:>6}  {:<6} {}\n",
-            format!("{}.", rr.name),
-            rr.ttl,
-            type_to_str(rr.data.type_code()),
-            rr.data.to_text(),
-        ));
-    }
-    let answer_section = if lk.answers.is_empty() {
-        "; (no answer records)\n".to_string()
-    } else {
-        lines
     };
-    let mut authority = String::new();
-    for rr in &lk.authority {
-        authority.push_str(&format!(
-            "; AUTHORITY  {:<24} {:>6}  {:<6} {}\n",
-            format!("{}.", rr.name),
-            rr.ttl,
-            type_to_str(rr.data.type_code()),
-            rr.data.to_text(),
-        ));
-    }
-    let aa = if lk.aa { " aa" } else { "" };
-    format!(
-        r#"<pre class="answer">; QUESTION  {qname}. {qtype}
-; status: {rcode}{aa}, {ancount} answer(s)
-{answers}{authority}</pre>"#,
-        qname = esc(qname),
-        qtype = esc(&type_to_str(qtype)),
-        rcode = rcode_str(lk.rcode),
-        aa = aa,
-        ancount = lk.answers.len(),
-        answers = esc(&answer_section),
-        authority = esc(&authority),
-    )
-}
 
-fn rcode_str(rcode: u8) -> &'static str {
-    match rcode {
-        0 => "NOERROR",
-        1 => "FORMERR",
-        2 => "SERVFAIL",
-        3 => "NXDOMAIN",
-        4 => "NOTIMP",
-        5 => "REFUSED",
-        _ => "OTHER",
-    }
+    zones_view::render_test_card(&name, &qtype_str, &outcome)
 }
 
 // ---------------------------------------------------------------------------
