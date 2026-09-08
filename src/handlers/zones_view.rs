@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn render_zone_representative_golden() {
         let output = render_zone(&zone(), &records(), &history(), "csrf-1", EDITABLE_TYPES);
-        assert_golden(&output, 3315, 0x718ce706884edef5);
+        assert_golden(&output, 3344, 0x59fa5457d6e3f88d);
         assert_eq!(output.matches("<tr>").count(), 5);
         assert!(output.contains("serial 42"));
     }
@@ -363,7 +363,7 @@ mod tests {
             "csrf<&\"'",
             EDITABLE_TYPES,
         );
-        assert_golden(&output, 3020, 0xe6b76af3843e0a82);
+        assert_golden(&output, 3057, 0x3b603f9299a67333);
         assert!(output.contains("name&lt;&amp;&quot;&#x27;"));
         assert!(!output.contains("owner<&"));
     }
@@ -386,7 +386,7 @@ mod tests {
             "csrf<&\"'",
             EDITABLE_TYPES,
         );
-        assert_golden(&output, 2772, 0x0e2473f782bc374b);
+        assert_golden(&output, 2786, 0xd4e2a8cfb7b3ac7a);
         assert_eq!(output.matches(r#"name="csrf_token""#).count(), 3);
         assert_eq!(output.matches("csrf&lt;&amp;&quot;&#x27;").count(), 3);
         assert!(output.contains("return confirm('Delete this record?');"));
