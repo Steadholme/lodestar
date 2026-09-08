@@ -33,7 +33,7 @@ pub(super) fn render_zone(
         rows.push_str(&format!(
             r#"<tr>
   <td class="mono">{name}</td>
-  <td><span class="rtype">{rtype}</span></td>
+  <td><span class="rtype" data-type="{rtype}">{rtype}</span></td>
   <td class="mono">{ttl}</td>
   <td class="mono value">{value}</td>
   <td class="row-action">

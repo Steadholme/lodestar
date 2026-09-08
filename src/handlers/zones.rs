@@ -19,7 +19,7 @@ use crate::auth;
 use crate::dns::type_from_str;
 use crate::error::AppError;
 use crate::handlers::zones_view;
-use crate::handlers::{app_css, esc, topbar};
+use crate::handlers::{esc, shell, theme_of};
 use crate::store::{Record, Zone, ZoneHistory};
 use crate::{new_id, now_secs, reload_now, zonefile, AppState};
 
@@ -138,9 +138,7 @@ pub async fn index(
 
     let test = render_test(&state, &query);
 
-    let body = ZONES_HTML
-        .replace("{{CSS}}", app_css())
-        .replace("{{TOPBAR}}", &topbar("Lodestar", &email))
+    let body = shell(ZONES_HTML, "/", theme_of(&headers), Some(&email))
         .replace("{{STATUS}}", &esc(&status))
         .replace("{{TEST}}", &test)
         .replace("{{ZONES}}", &zone_blocks);

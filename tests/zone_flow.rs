@@ -27,6 +27,21 @@ async fn full_zone_flow_in_memory() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "ok");
 
+    // --- versioned stylesheet is public + immutable -----------------------
+    let resp = app(state.clone())
+        .oneshot(get("/assets/lodestar-20260908.css"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()[header::CONTENT_TYPE],
+        "text/css; charset=utf-8"
+    );
+    assert_eq!(
+        resp.headers()[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+
     // --- the seeded zone shows up ------------------------------------------
     let (status, body) = call(&state, get("/")).await;
     assert_eq!(status, StatusCode::OK);
@@ -41,6 +56,11 @@ async fn full_zone_flow_in_memory() {
         "CAA form option"
     );
     assert!(body.contains("Import zone file"), "BIND import form shown");
+    assert!(body.contains("/assets/lodestar-20260908.css"));
+    assert!(
+        !body.contains("<style"),
+        "page must not inline the stylesheet"
+    );
 
     // --- GET / mints a CSRF cookie -----------------------------------------
     let resp = app(state.clone()).oneshot(get("/")).await.unwrap();

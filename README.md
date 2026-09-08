@@ -96,3 +96,13 @@ cargo test            # unit (wire + resolver) + the in-memory HTTP flow
 ```
 
 No OpenSSL anywhere: the DNS server is hand-rolled over tokio UDP+TCP and sqlx uses rustls (ring).
+
+## 前端 v2（2026-09-08）
+
+DNS zones 页面按 Figma 文件 `fQLcGuxYBzv9eNjQse9CGI`（Lodestar，deep-green accent）换到共享的
+Steadholme v2 视觉系统：应用栏、记录表（按类型着色的 rtype 徽章、mono 名字与值、TTL）、
+行内的测试查询与新增记录表单、深色 dig 应答面、导入与变更历史、状态瓦片错误页、
+页脚同产品线链接。记录类型徽章新增 `data-type`，颜色按 A/AAAA/MX/TXT/NS/CNAME/CAA 区分。
+
+样式在 `static/service.css`，与 Odyssey 基底层叠后由 `/assets/lodestar-20260908.css` 以不可变
+缓存提供；改样式时同步提升该路径里的日期（测试会断言路径）。

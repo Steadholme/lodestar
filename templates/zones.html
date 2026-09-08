@@ -1,21 +1,23 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{THEME_ATTR}}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="{{COLOR_SCHEME}}">
   <title>Lodestar · Steadholme</title>
-  <style>{{CSS}}</style>
+  <link rel="stylesheet" href="{{CSS_PATH}}">
 </head>
-<body class="page-console">
-{{TOPBAR}}
+<body class="page-v2">
+{{APPBAR}}
 <main class="console console--wide">
+
   <div class="console__head">
     <h1>DNS zones</h1>
     <p class="sub">{{STATUS}}</p>
   </div>
   {{TEST}}
   {{ZONES}}
+{{FOOTER}}
 </main>
 </body>
 </html>
